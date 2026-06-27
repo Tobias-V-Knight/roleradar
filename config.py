@@ -8,7 +8,15 @@
 # -----------------------------------------------------------------------------
 
 # How often APScheduler re-runs a full scrape of every active company.
-SCRAPE_INTERVAL_HOURS = 6
+# Default is weekly (168h): the heavy Playwright scrape runs on a loop in the
+# background, while the dashboard always serves instantly from the stored data.
+# Override with the SCRAPE_INTERVAL_HOURS env var (e.g. 6 for every 6 hours).
+# NOTE: on App Service Free tier the app sleeps when idle, so this in-app timer
+# may not fire — use Basic tier + "Always On", or an external cron that calls
+# POST /api/scrape. See README "Deploy to Azure (Docker)".
+import os  # noqa: E402
+
+SCRAPE_INTERVAL_HOURS = int(os.getenv("SCRAPE_INTERVAL_HOURS", "168"))
 
 # Politeness delay between company scrapes so we don't hammer career sites.
 SCRAPE_DELAY_SECONDS = 2

@@ -1,0 +1,28 @@
+# Keep secrets, local junk, and the working DB OUT of the Docker image.
+# (seed.db is intentionally NOT ignored — we want the dataset in the image.)
+
+# Secrets — never bake into an image
+.env
+.env.*
+!.env.example
+env_team_share.txt
+*secret*
+*credentials*
+
+# Local working database (regenerated from seed.db on first run)
+roleradar.db
+
+# Python / venv
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Git + macOS
+.git/
+.gitignore
+.DS_Store
+
+# AutoGen scratch + reports
+workspace/
+playwright-report/

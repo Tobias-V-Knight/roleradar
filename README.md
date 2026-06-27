@@ -120,15 +120,68 @@ generic link-scanner (flagged if it finds < 3 jobs — likely needs a real parse
 
 ---
 
-## Azure AI Foundry deployment note
+## Run with Docker (easiest for teammates)
 
-This app runs locally with Azure AI Foundry SDK integration. To deploy the
-agents as a hosted Foundry workflow:
+No Python version worries, no `pip install`, no `playwright install` — the image
+has everything (incl. Chromium) and the `seed.db` dataset baked in.
 
-> **[STUB]** Provision an Azure AI Foundry project, register the three AutoGen
-> agents as a hosted GroupChat via `azure-ai-projects`, attach a compute
-> session, and schedule the scrape through Foundry's job runner instead of
-> local APScheduler. The integration point is `foundry/client.deploy_to_foundry()`.
+```bash
+git clone https://github.com/Tobias-V-Knight/roleradar.git
+cd roleradar
+docker build -t roleradar .
+docker run -p 8000:8000 --env-file .env roleradar      # .env: KEY=value, no spaces!
+# open http://localhost:8000
+```
+
+> **Note:** `docker --env-file` is stricter than `python-dotenv` — use
+> `AZURE_OPENAI_API_KEY=value` with **no spaces** around `=`.
+
+---
+
+## Deploy to Azure App Service (Docker container)
+
+The container includes Chromium, so **Playwright works in the cloud** (live
+re-scraping of JS-heavy sites), unlike the standard Python runtime.
+
+1. **Build & push the image** to a registry (Azure Container Registry or GitHub
+   Container Registry):
+   ```bash
+   docker build -t roleradar .
+   docker tag roleradar ghcr.io/tobias-v-knight/roleradar:latest
+   docker push ghcr.io/tobias-v-knight/roleradar:latest
+   ```
+2. **Create the Web App** (Portal → Web App → *Docker Container*, Linux), or CLI:
+   ```bash
+   az webapp create -g <rg> -p <plan> -n roleradar \
+     --deployment-container-image-name ghcr.io/tobias-v-knight/roleradar:latest
+   ```
+3. **Set Application Settings** (this is where the key lives — never in the repo):
+   `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT=gpt-4o`,
+   and `WEBSITES_PORT=8000`.
+4. **Keep the weekly scrape alive:** set the plan to **Basic (B1)+** with
+   **"Always On"** enabled (the Free tier sleeps and the in-app scheduler won't
+   fire), *or* trigger `POST /api/scrape` from an external weekly cron
+   (GitHub Action). Schedule is `SCRAPE_INTERVAL_HOURS` (default 168 = weekly).
+5. Browse `https://roleradar.azurewebsites.net`.
+
+> If your course Azure tenant blocks App Service or registry creation (same kind
+> of policy that restricts model deployments), **Railway** runs the same Dockerfile
+> with zero changes as a fallback.
+
+### Hosted Foundry workflow (stubbed)
+
+> **[STUB]** To run the agents as a *hosted* Foundry workflow (vs. local
+> APScheduler): provision an Azure AI Foundry project, register the three AutoGen
+> agents as a hosted GroupChat via `azure-ai-projects`, attach a compute session,
+> and schedule the scrape through Foundry's job runner. Integration point:
+> `foundry/client.deploy_to_foundry()`.
+
+---
+
+## 📚 Stack rationale & lessons learned
+
+See **[LESSONS.md](LESSONS.md)** — why each library was chosen, the httpx-vs-Playwright
+mental model, why Docker, reusable patterns, and the gotchas that bit us.
 
 ---
 
