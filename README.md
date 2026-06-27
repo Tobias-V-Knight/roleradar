@@ -178,12 +178,6 @@ re-scraping of JS-heavy sites), unlike the standard Python runtime.
 
 ---
 
-## 📚 Stack rationale & lessons learned
-
-See **[LESSONS.md](LESSONS.md)** — why each library was chosen, the httpx-vs-Playwright
-mental model, why Docker, reusable patterns, and the gotchas that bit us.
-
----
 
 ## Grading rubric (MSBA 6511) alignment
 
