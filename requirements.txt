@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+httpx
+beautifulsoup4
+playwright
+rapidfuzz
+apscheduler
+pyautogen
+azure-ai-projects
+azure-identity
+openai
+python-dotenv
