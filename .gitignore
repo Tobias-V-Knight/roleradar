@@ -1,5 +1,13 @@
 # Secrets — never commit
 .env
+.env.*
+!.env.example
+env_team_share.txt
+*secret*
+*credentials*
+
+# macOS junk
+.DS_Store
 
 # Database (generated on first run)
 roleradar.db
