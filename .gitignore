@@ -24,5 +24,8 @@ workspace/
 # Playwright
 playwright-report/
 
-# Personal lessons / portfolio notes — keep local, off the public repo
+# Personal lessons / portfolio notes + dev guidance — keep local, off public repo
 LESSONS.md
+CLAUDE.md
+ARCHITECTURE.md
+docs/
