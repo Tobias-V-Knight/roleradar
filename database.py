@@ -5,10 +5,19 @@
 # helper functions. That makes the data layer easy to reason about and test.
 # -----------------------------------------------------------------------------
 
+import os
+import shutil
 import sqlite3
 from datetime import datetime, timezone
 
 import config
+
+# A pre-scraped snapshot shipped in the repo so the whole team sees the SAME
+# dataset on first run without re-scraping. On startup, if there's no working
+# database yet but this snapshot exists, we copy it to DB_PATH. The working
+# copy (roleradar.db) is gitignored, so anyone's later scrapes stay local and
+# never touch the shared snapshot.
+SEED_DB_PATH = "seed.db"
 
 # -----------------------------------------------------------------------------
 # Connection helper
@@ -89,7 +98,16 @@ CREATE TABLE IF NOT EXISTS scrape_runs (
 
 
 def init_db():
-    """Create tables (if missing) and seed the reference data once."""
+    """Create tables (if missing) and seed the reference data once.
+
+    First, if there's no working DB yet but the shipped snapshot (seed.db)
+    exists, copy it so teammates open the app to the same pre-scraped jobs.
+    """
+    if not os.path.exists(config.DB_PATH) and os.path.exists(SEED_DB_PATH):
+        shutil.copy(SEED_DB_PATH, config.DB_PATH)
+        print(f"[RoleRadar] seeded {config.DB_PATH} from {SEED_DB_PATH} "
+              "(shared dataset snapshot)")
+
     conn = get_conn()
     conn.executescript(SCHEMA)
     conn.commit()

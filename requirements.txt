@@ -5,7 +5,11 @@ beautifulsoup4
 playwright
 rapidfuzz
 apscheduler
-pyautogen
+# Pinned to the classic 0.2 AutoGen API (autogen.AssistantAgent / GroupChat).
+# IMPORTANT: this line REQUIRES Python 3.9-3.12. On Python 3.13, pip installs
+# pyautogen 0.10 (the new restructured API with no `import autogen` module) and
+# the agents break. Use Python <3.13 — see README "Setup".
+pyautogen==0.2.35
 azure-ai-projects
 azure-identity
 openai

@@ -35,14 +35,39 @@ OpenAI credentials and resume analysis goes live with **no code change**.
 
 ## Setup
 
+> **⚠️ Python version:** use **Python 3.9–3.12**, NOT 3.13. The pinned
+> `pyautogen==0.2.35` (classic AutoGen API) is incompatible with 3.13 — on 3.13
+> pip silently installs the wrong AutoGen and the agents break.
+
+### Quick start (macOS / Linux) — one command
+
 ```bash
-pip install -r requirements.txt
-playwright install chromium          # for JS-heavy career pages
-cp .env.example .env                 # then edit (or leave blank for stub mode)
-python main.py
+git clone https://github.com/Tobias-V-Knight/roleradar.git
+cd roleradar
+./setup.sh                # creates .venv, installs deps + Chromium, makes .env
+./.venv/bin/python main.py
+# open http://localhost:8000
 ```
 
-### `.env`
+`setup.sh` auto-picks a compatible Python (3.9–3.12). The app opens to the
+**shared dataset** (`seed.db`, ~9,800 pre-scraped jobs) — no scraping needed.
+
+### Quick start (Windows)
+
+```powershell
+git clone https://github.com/Tobias-V-Knight/roleradar.git
+cd roleradar
+py -3.12 -m venv .venv          # any Python 3.9-3.12
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\playwright install chromium
+copy .env.example .env          # then paste the shared key (see below)
+.venv\Scripts\python main.py
+```
+
+### `.env` (paste the shared team key here)
+
+Tobias shares the Azure key/endpoint **privately** (not in this repo). Paste the
+shared values so everyone uses the same live GPT-4o for resume analysis:
 
 ```
 AZURE_AI_PROJECT_CONNECTION_STRING=   # leave blank — full Foundry deploy is stubbed
