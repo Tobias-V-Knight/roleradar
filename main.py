@@ -254,8 +254,11 @@ def analyze_job(job_id: int, body: ResumeIn):
     job = database.get_job(job_id)
     if not job:
         raise HTTPException(404, "job not found")
-    jd_text = job.get("description") or job.get("title", "")
-    analysis = get_orchestrator().analyze_resume(jd_text, body.resume_text)
+    orch = get_orchestrator()
+    # Lazily fetch the full JD now (cached after the first call) so analysis has
+    # real text instead of just the title.
+    jd_text = orch.ensure_description(job_id) or job.get("title", "")
+    analysis = orch.analyze_resume(jd_text, body.resume_text)
     return analysis
 
 

@@ -113,8 +113,10 @@ class RoleRadarOrchestrator:
                     new_count += 1
                 if job.get("is_match"):
                     match_count += 1
-                    # Fetch the full JD for matched jobs so resume analysis works.
-                    self._maybe_fetch_description(job)
+                    # NOTE: JD text is fetched LAZILY (on first "Analyze" click),
+                    # not here — eagerly fetching a description for every match
+                    # turned a 3-minute scrape into a 45-minute one. See
+                    # ensure_description(), called by the /analyze endpoint.
 
             summary.update(jobs_found=len(jobs), new_jobs=new_count, matches=match_count)
             database.mark_company_scraped(cid, error=None)
@@ -128,16 +130,23 @@ class RoleRadarOrchestrator:
 
         return summary
 
-    def _maybe_fetch_description(self, job):
-        """Fetch + store the JD text for a matched job (best-effort)."""
+    def ensure_description(self, job_id):
+        """Lazily fetch + cache a job's JD text the first time it's needed.
+
+        Called by the /analyze endpoint. If the description is already stored we
+        return it immediately; otherwise we fetch it once, save it, and return.
+        Keeps the bulk scrape fast while still giving resume analysis full text.
+        """
         import scraper
-        # Find the stored job by URL to attach the description (direct lookup).
-        stored = database.get_job_by_url(job["url"])
-        if not stored or stored.get("description"):
-            return
+        job = database.get_job(job_id)
+        if not job:
+            return ""
+        if job.get("description"):
+            return job["description"]
         desc = scraper.fetch_job_description(job["url"])
         if desc:
-            database.set_job_description(stored["id"], desc)
+            database.set_job_description(job_id, desc)
+        return desc or job.get("title", "")
 
     def run_full_scrape(self, only_company_id=None, note=None):
         """Scrape all active companies (or just one). Returns a run summary.
