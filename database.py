@@ -29,10 +29,12 @@ def get_conn():
     (row["title"]) instead of plain tuples — much easier to serialize to JSON
     for the API later.
     """
-    conn = sqlite3.connect(config.DB_PATH)
+    conn = sqlite3.connect(config.DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
-    # Enforce foreign keys (off by default in SQLite).
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL mode lets readers and writers overlap instead of blocking each other,
+    # which prevents "database is locked" during concurrent scrapes + API calls.
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
@@ -117,6 +119,15 @@ def init_db():
 
     conn = get_conn()
     conn.executescript(SCHEMA)
+    # Migrate: add years_experience column if it doesn't exist yet.
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+    if "years_experience" not in existing:
+        conn.execute("ALTER TABLE jobs ADD COLUMN years_experience TEXT")
+    if "last_analysis" not in existing:
+        conn.execute("ALTER TABLE jobs ADD COLUMN last_analysis TEXT")
+    if "last_analyzed_at" not in existing:
+        conn.execute("ALTER TABLE jobs ADD COLUMN last_analyzed_at TEXT")
+    conn.commit()
     conn.commit()
     _seed_if_empty(conn)
     conn.close()
@@ -195,6 +206,7 @@ def add_company(name, careers_url, tier=1):
 
 def delete_company(company_id):
     conn = get_conn()
+    conn.execute("DELETE FROM jobs WHERE company_id = ?", (company_id,))
     conn.execute("DELETE FROM companies WHERE id = ?", (company_id,))
     conn.commit()
     conn.close()
@@ -203,6 +215,13 @@ def delete_company(company_id):
 def toggle_company(company_id):
     conn = get_conn()
     conn.execute("UPDATE companies SET active = NOT active WHERE id = ?", (company_id,))
+    row = conn.execute("SELECT active FROM companies WHERE id = ?", (company_id,)).fetchone()
+    if row and not row["active"]:
+        conn.execute(
+            "UPDATE jobs SET is_match = 0, matched_keyword = NULL, match_score = NULL "
+            "WHERE company_id = ?",
+            (company_id,),
+        )
     conn.commit()
     conn.close()
 
@@ -238,8 +257,29 @@ def add_role(keyword):
 def delete_role(role_id):
     conn = get_conn()
     conn.execute("DELETE FROM target_roles WHERE id = ?", (role_id,))
+    # Clear any job whose keyword no longer exists in the active roles list.
+    conn.execute(
+        """UPDATE jobs SET is_match = 0, matched_keyword = NULL, match_score = NULL
+           WHERE is_match = 1
+             AND (matched_keyword IS NULL
+                  OR matched_keyword NOT IN (SELECT keyword FROM target_roles))"""
+    )
     conn.commit()
     conn.close()
+
+
+def recalibrate_matches():
+    """Clear is_match on any job whose matched_keyword is no longer a target role."""
+    conn = get_conn()
+    affected = conn.execute(
+        """UPDATE jobs SET is_match = 0, matched_keyword = NULL, match_score = NULL
+           WHERE is_match = 1
+             AND (matched_keyword IS NULL
+                  OR matched_keyword NOT IN (SELECT keyword FROM target_roles))"""
+    ).rowcount
+    conn.commit()
+    conn.close()
+    return affected
 
 
 def get_role_keywords():
@@ -342,6 +382,23 @@ def upsert_job(job):
 def set_job_description(job_id, description):
     conn = get_conn()
     conn.execute("UPDATE jobs SET description = ? WHERE id = ?", (description, job_id))
+    conn.commit()
+    conn.close()
+
+
+def set_job_years_experience(job_id, years_experience):
+    conn = get_conn()
+    conn.execute("UPDATE jobs SET years_experience = ? WHERE id = ?", (years_experience, job_id))
+    conn.commit()
+    conn.close()
+
+
+def set_job_analysis(job_id, analysis_json: str):
+    conn = get_conn()
+    conn.execute(
+        "UPDATE jobs SET last_analysis = ?, last_analyzed_at = ? WHERE id = ?",
+        (analysis_json, _now(), job_id),
+    )
     conn.commit()
     conn.close()
 

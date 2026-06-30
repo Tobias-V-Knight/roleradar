@@ -1,11 +1,12 @@
 # agents/resume_builder.py
 # -----------------------------------------------------------------------------
 # Two responsibilities:
-#   1. generate_content() — ask GPT-4o to produce tailored bullets/projects/skills
-#      as structured JSON, sourced strictly from the master CV.
+#   1. generate_content() — ask GPT-4o to produce ATS-optimized projects and
+#      skills as structured JSON, sourced strictly from the master CV.
 #   2. build_docx() — open the base resume DOCX as a template and replace only
-#      the dynamic sections (bullets, projects, skills) in-place, then return
-#      the modified file as bytes for download.
+#      the projects and skills sections in-place, then return the modified file
+#      as bytes for download. Experience bullets are left untouched — edits to
+#      those are surfaced as suggestions in the analysis step instead.
 # -----------------------------------------------------------------------------
 
 import json
@@ -13,10 +14,10 @@ import json
 from foundry.client import OPENAI_STUB_MODE, get_azure_openai_config
 
 SYSTEM_MSG = (
-    "You are an expert resume writer. Given a master CV, a job description, and "
-    "the candidate's base resume, rewrite only the experience bullet points, select "
-    "the best projects, and curate the skills list to match the job description. "
-    "Use ONLY content that appears in the master CV — never fabricate experience. "
+    "You are an expert ATS optimizer and resume writer. Given a master CV, a job "
+    "description, and the candidate's base resume, select and describe the best "
+    "projects and curate the skills list to maximize ATS keyword coverage for this "
+    "specific job. Use ONLY content that appears in the master CV — never fabricate. "
     "Return ONLY valid JSON."
 )
 
@@ -26,33 +27,46 @@ USER_TEMPLATE = """JOB DESCRIPTION:
 MASTER CV (all available experience — the only content you may draw from):
 {cv_text}
 
-BASE RESUME (for structure reference — company names, titles, and dates are fixed):
+BASE RESUME (projects and skills sections will be replaced; experience section is kept as-is):
 {base_resume_text}
 
 Return JSON with exactly these fields:
 {{
-  "experience_bullets": {{
-    "<SHORT company name matching the base resume>": ["<bullet>", "<bullet>", "<bullet>"]
-  }},
   "projects": [
     {{"name": "<project name>", "description": "<1-2 sentence description from CV>"}}
   ],
-  "skills_tools": "<comma-separated tools ordered by relevance to JD>",
-  "skills_methods": "<comma-separated methods ordered by relevance to JD>"
+  "skills_tools": "<comma-separated tools, keep under 120 characters total>",
+  "skills_methods": "<comma-separated methods, keep under 210 characters total>",
+  "ats_keywords": ["<every ATS-critical keyword/phrase extracted from the JD>"],
+  "ats_matched": ["<keywords from ats_keywords that now appear in the generated skills/projects>"],
+  "ats_missing_from_cv": ["<JD keywords that cannot be supported by anything in the master CV>"]
 }}
 
 Rules:
-- Use short company name keys (e.g. "CARLSON ANALYTICS LAB") that are substrings of
-  the full lines in the base resume — this is how they get matched to the right section.
-- Keep the same number of bullets as the base resume for each company.
-- Pick 2-3 projects from the CV that best match the JD; do not invent new ones.
-- Skills must only include items present in the master CV.
-- Each bullet must start with a strong past-tense action verb and quantify impact.
+- SKILLS ARE THE TOP PRIORITY: scan the JD for every tool, technology, method,
+  framework, and domain term a recruiter would boolean-search for. Include ALL of
+  them in skills_tools or skills_methods if they appear anywhere in the master CV
+  or are demonstrably used in the listed experience. Use EXACT JD phrasing where
+  possible (e.g. "Product-Led Growth" not just "growth", "A/B Testing" not just
+  "testing").
+- Single-page constraint: keep skills_tools under 120 characters and
+  skills_methods under 210 characters. Prioritize ATS-critical JD keywords over
+  generic terms if you must trim.
+- Projects: pick 2-3 from the master CV's actual projects section that best
+  demonstrate the skills this JD requires. You may adjust project titles to echo
+  JD language, but keep them true to the actual project content — no large
+  stretches. Do NOT repackage or duplicate content that already appears in the
+  experience/work history section — projects must be distinct entries from the CV,
+  not reworded job duties.
+- ats_missing_from_cv: be honest about gaps — list JD keywords that cannot be
+  justified by anything in the CV. This is the user's gap signal.
+- Skills must only include items present in the master CV or demonstrably used
+  in the listed experience.
 """
 
 
 def generate_content(jd_text: str, cv_text: str, base_resume_text: str) -> dict:
-    """Call GPT-4o to produce tailored resume content. Stubs gracefully if no creds."""
+    """Call GPT-4o to produce ATS-optimized projects + skills. Stubs if no creds."""
     if OPENAI_STUB_MODE:
         print("[STUB] resume_builder: returning mock content (no Azure OpenAI creds)")
         return _stub_content()
@@ -91,27 +105,23 @@ def generate_content(jd_text: str, cv_text: str, base_resume_text: str) -> dict:
 
 def _stub_content() -> dict:
     return {
-        "experience_bullets": {
-            "CARLSON ANALYTICS LAB": [
-                "[STUB] Add Azure OpenAI credentials for real tailored bullets.",
-                "[STUB] Built analytics pipelines to surface performance insights.",
-                "[STUB] Evaluated causal impact of key initiatives via regression.",
-            ]
-        },
         "projects": [
             {
-                "name": "[STUB] Sample Project",
+                "name": "[STUB] Growth Experimentation & Causal Analytics",
                 "description": "Add Azure OpenAI credentials for real GPT-4o content.",
             }
         ],
         "skills_tools": "[STUB] Python, SQL, Tableau",
-        "skills_methods": "[STUB] Analytics, A/B Testing, Causal Inference",
+        "skills_methods": "[STUB] Growth/Product Analytics, A/B Testing, Causal Inference",
+        "ats_keywords": ["SQL", "growth", "experimentation", "dashboard"],
+        "ats_matched": ["SQL", "growth", "experimentation", "dashboard"],
+        "ats_missing_from_cv": [],
         "_stub": True,
     }
 
 
 # -----------------------------------------------------------------------------
-# DOCX builder — in-place template modification
+# DOCX builder — replaces projects and skills only; experience is untouched
 # -----------------------------------------------------------------------------
 
 def _set_para_text(para, new_text: str):
@@ -122,15 +132,6 @@ def _set_para_text(para, new_text: str):
     para.runs[0].text = new_text
     for run in para.runs[1:]:
         run.text = ""
-
-
-def _find_company_key(para_text: str, experience_bullets: dict):
-    """Return the matching key from experience_bullets if it's a substring of para_text."""
-    upper = para_text.upper()
-    for key in experience_bullets:
-        if key.upper() in upper:
-            return key
-    return None
 
 
 def _all_paragraphs_in_order(doc):
@@ -152,7 +153,6 @@ def _all_paragraphs_in_order(doc):
                 for cell in row.cells:
                     for para in cell.paragraphs:
                         yield para
-        # Recurse into body-level containers (e.g. txbx)
         for child in el:
             child_tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
             if child_tag not in ("p", "tbl"):
@@ -164,23 +164,21 @@ def _all_paragraphs_in_order(doc):
 
 def build_docx(base_docx_bytes: bytes, content_json: dict) -> bytes:
     """
-    Open the base resume DOCX as a template, replace the dynamic sections
-    (experience bullets, projects, skills) in-place, return modified bytes.
+    Open the base resume DOCX as a template, replace only the projects and
+    skills sections in-place, return modified bytes.
+    Experience bullets are intentionally left unchanged — targeted edits for
+    those are surfaced in the analysis step as suggestions for the user.
     """
     from io import BytesIO
     from docx import Document
 
-    experience_bullets: dict = content_json.get("experience_bullets", {})
     projects: list = content_json.get("projects", [])
     skills_tools: str = content_json.get("skills_tools", "")
     skills_methods: str = content_json.get("skills_methods", "")
 
     doc = Document(BytesIO(base_docx_bytes))
 
-    # --- First pass: bucket paragraphs by section (table-aware) ---
     section = None
-    exp_company_buckets: dict = {}   # company_key -> [bullet paras]
-    current_company_key = None
     project_paras: list = []
     skill_paras: list = []
 
@@ -188,41 +186,20 @@ def build_docx(base_docx_bytes: bytes, content_json: dict) -> bytes:
 
     for para in _all_paragraphs_in_order(doc):
         text = para.text.strip()
-        # Normalise: strip leading backtick/apostrophe artefacts some DOCX exports add
-        text = text.lstrip("`'‘’“”").strip()
+        text = text.lstrip("`'''""").strip()
         upper = text.upper()
 
         if upper in SECTION_HEADERS:
             section = upper
-            current_company_key = None
             continue
 
         if not text:
             continue
 
-        if section == "EXPERIENCE":
-            if "●" in text:
-                if current_company_key:
-                    exp_company_buckets.setdefault(current_company_key, []).append(para)
-            else:
-                matched = _find_company_key(text, experience_bullets)
-                if matched:
-                    current_company_key = matched
-
-        elif section == "DATA SCIENCE PROJECTS":
+        if section == "DATA SCIENCE PROJECTS":
             project_paras.append(para)
-
         elif section == "TECHNICAL SKILLS":
             skill_paras.append(para)
-
-    # --- Replace experience bullets ---
-    for key, bullet_paras in exp_company_buckets.items():
-        new_bullets = experience_bullets.get(key, [])
-        for i, para in enumerate(bullet_paras):
-            if i < len(new_bullets):
-                _set_para_text(para, "● " + new_bullets[i])
-            else:
-                _set_para_text(para, "")
 
     # --- Replace project paragraphs ---
     for i, para in enumerate(project_paras):

@@ -116,8 +116,13 @@ def _slug_hyphen(company_name):
 
 def scrape_greenhouse(company_name, url=None):
     """Greenhouse boards expose a clean JSON API. Try common slug guesses."""
-    slugs = {_slugify(company_name), _slug_hyphen(company_name),
-             company_name.lower().replace(" ", "")}
+    slugs = [_slugify(company_name), _slug_hyphen(company_name),
+             company_name.lower().replace(" ", "")]
+    # If a Greenhouse URL was provided, extract its slug and try it first.
+    if url:
+        path = urlparse(url).path.strip("/").split("/")[0]
+        if path and path not in slugs:
+            slugs.insert(0, path)
     for slug in slugs:
         api = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
         try:
@@ -142,7 +147,11 @@ def scrape_greenhouse(company_name, url=None):
 
 def scrape_lever(company_name, url=None):
     """Lever postings JSON API."""
-    slugs = {_slugify(company_name), _slug_hyphen(company_name)}
+    slugs = [_slugify(company_name), _slug_hyphen(company_name)]
+    if url:
+        path = urlparse(url).path.strip("/").split("/")[0]
+        if path and path not in slugs:
+            slugs.insert(0, path)
     for slug in slugs:
         api = f"https://api.lever.co/v0/postings/{slug}?mode=json"
         try:
@@ -314,6 +323,42 @@ def scrape_yc(url):
 # -----------------------------------------------------------------------------
 # Dispatcher
 # -----------------------------------------------------------------------------
+def scrape_google(company_name, url):
+    """Scrape Google Careers (JS-rendered). Uses Playwright + parses sMn82b cards."""
+    BASE = "https://www.google.com/about/careers/applications/"
+    html = fetch_rendered(url, wait_ms=5000)
+    soup = BeautifulSoup(html, "html.parser")
+
+    jobs = []
+    # Each job card lives in a div.sMn82b; the link to the posting is a sibling <a>
+    for card in soup.find_all("div", class_="sMn82b"):
+        parts = [p.strip() for p in card.get_text(separator="|").split("|") if p.strip()]
+        if not parts:
+            continue
+        title = parts[0]
+        # Location follows the "place" icon text
+        location = ""
+        for i, p in enumerate(parts):
+            if p == "place" and i + 1 < len(parts):
+                location = parts[i + 1]
+                break
+        # Find the nearest <a> with a job URL in the ancestor chain
+        link_el = card.find_parent("a", href=True)
+        if not link_el:
+            # Try sibling/nearby <a> within the card's parent
+            parent = card.parent
+            link_el = parent.find("a", href=lambda h: h and "jobs/results/" in h)
+        href = link_el["href"] if link_el else ""
+        if href and not href.startswith("http"):
+            href = urljoin(BASE, href)
+        if not title or not href:
+            continue
+        jobs.append({"title": title, "url": href, "company": company_name, "location": location})
+
+    print(f"[scrape_google] found {len(jobs)} jobs")
+    return jobs
+
+
 def scrape_company(company_name, url):
     """Route a company to the right parser based on its careers URL.
 
@@ -337,6 +382,8 @@ def scrape_company(company_name, url):
         return scrape_anthropic(company_name, url)
     if "openai" in name_lower:
         return scrape_openai(company_name, url)
+    if "google.com/about/careers" in url:
+        return scrape_google(company_name, url)
 
     # --- ATS guesses for known-tricky companies (try API before HTML) ---
     # Many of the seed companies use Greenhouse/Lever under a custom URL.

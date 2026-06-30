@@ -19,6 +19,7 @@
 #     whole scrape->match->store flow works offline for the demo.
 # -----------------------------------------------------------------------------
 
+import re
 import time
 
 import config
@@ -30,6 +31,26 @@ from foundry.client import (
     get_azure_openai_config,
     get_foundry_client,
 )
+
+
+def _extract_years_experience(text: str) -> str | None:
+    """Pull the first years-of-experience requirement out of a JD."""
+    patterns = [
+        r'(\d+)\s*[-–to]+\s*(\d+)\s*\+?\s*years?',   # "3-5 years", "3 to 5 years"
+        r'(\d+)\s*\+\s*years?',                         # "3+ years"
+        r'(\d+)\s*or more years?',                      # "3 or more years"
+        r'minimum\s+(?:of\s+)?(\d+)\s*years?',         # "minimum of 3 years"
+        r'at least\s+(\d+)\s*years?',                  # "at least 3 years"
+        r'(\d+)\s*years?\s+of\s+(?:relevant\s+)?experience',  # "3 years of experience"
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            groups = [g for g in m.groups() if g is not None]
+            if len(groups) == 2:
+                return f"{groups[0]}–{groups[1]} yrs"
+            return f"{groups[0]}+ yrs"
+    return None
 
 
 class RoleRadarOrchestrator:
@@ -135,17 +156,25 @@ class RoleRadarOrchestrator:
 
         Called by the /analyze endpoint. If the description is already stored we
         return it immediately; otherwise we fetch it once, save it, and return.
-        Keeps the bulk scrape fast while still giving resume analysis full text.
+        Also extracts and stores years-of-experience on first fetch.
         """
         import scraper
         job = database.get_job(job_id)
         if not job:
             return ""
         if job.get("description"):
+            # Description already cached — still extract YoE if not done yet.
+            if not job.get("years_experience"):
+                yoe = _extract_years_experience(job["description"])
+                if yoe:
+                    database.set_job_years_experience(job_id, yoe)
             return job["description"]
         desc = scraper.fetch_job_description(job["url"])
         if desc:
             database.set_job_description(job_id, desc)
+            yoe = _extract_years_experience(desc)
+            if yoe:
+                database.set_job_years_experience(job_id, yoe)
         return desc or job.get("title", "")
 
     def run_full_scrape(self, only_company_id=None, note=None):

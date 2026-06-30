@@ -65,6 +65,7 @@
               <th class="px-3 py-2"></th><th class="px-3 py-2">Tier</th>
               <th class="px-3 py-2">Company</th><th class="px-3 py-2">Title</th>
               <th class="px-3 py-2">Location</th><th class="px-3 py-2">Keyword</th>
+              <th class="px-3 py-2">Exp.</th>
               <th class="px-3 py-2">Score</th><th class="px-3 py-2">First Seen</th>
               <th class="px-3 py-2"></th>
             </tr>
@@ -77,7 +78,7 @@
 
     <!-- ===================== TAB 2: COMPANIES ===================== -->
     <section id="tab-companies" class="hidden">
-      <div class="flex gap-2 mb-4 text-sm">
+      <div class="flex gap-2 mb-2 text-sm">
         <input id="cName" placeholder="Company name" class="bg-gray-800 rounded px-3 py-2" />
         <input id="cUrl" placeholder="Careers URL" class="bg-gray-800 rounded px-3 py-2 flex-1" />
         <select id="cTier" class="bg-gray-800 rounded px-3 py-2">
@@ -86,6 +87,7 @@
         </select>
         <button onclick="addCompany()" class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded">Add</button>
       </div>
+      <p id="companiesMsg" class="text-xs mb-3 text-gray-400"></p>
       <div class="overflow-auto rounded-lg border border-gray-800" style="max-height:70vh">
         <table class="w-full text-sm">
           <thead class="text-left text-gray-400"><tr>
@@ -131,7 +133,10 @@
       <!-- Roles & Locations (existing content, now wrapped in a grid) -->
       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
       <div>
-        <h2 class="font-semibold mb-3">Target Roles</h2>
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-semibold">Target Roles</h2>
+          <button onclick="recalibrateMatches()" class="text-xs bg-amber-800 hover:bg-amber-700 text-amber-200 px-3 py-1 rounded">Fix Stale Matches</button>
+        </div>
         <div class="flex gap-2 mb-3 text-sm">
           <input id="rKw" placeholder="e.g. AI Engineer" class="bg-gray-800 rounded px-3 py-2 flex-1" />
           <button onclick="addRole()" class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded">Add</button>
@@ -198,8 +203,9 @@
         <textarea id="resumeText" rows="6" placeholder="Paste your resume text here, or upload a PDF / DOCX above..."
                   class="w-full bg-gray-800 rounded p-3 text-sm mb-3"></textarea>
       </div>
-      <div class="flex gap-3 items-center">
-        <button onclick="runAnalysis()" class="bg-sky-600 hover:bg-sky-500 px-4 py-2 rounded text-sm">Analyze</button>
+      <div class="flex gap-3 items-center flex-wrap">
+        <button onclick="runAnalysis(false)" class="bg-sky-600 hover:bg-sky-500 px-4 py-2 rounded text-sm">Analyze</button>
+        <button id="reanalyzeBtn" onclick="runAnalysis(true)" class="hidden bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded text-sm">Re-analyze</button>
         <button id="generateBtn" onclick="generateResume()" class="hidden bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded text-sm">Generate Resume</button>
         <span id="generateStatus" class="text-xs text-gray-400"></span>
       </div>
@@ -260,6 +266,7 @@ async function loadJobs() {
       <td class="px-3 py-2"><a href="${esc(j.url)}" target="_blank" class="text-sky-400 hover:underline">${esc(j.title)}</a></td>
       <td class="px-3 py-2 text-gray-400">${esc(j.location_normalized || j.location || '')}</td>
       <td class="px-3 py-2">${j.matched_keyword ? `<span class="text-xs bg-gray-700 px-2 py-0.5 rounded">${esc(j.matched_keyword)}</span>` : ''}</td>
+      <td class="px-3 py-2 text-xs ${j.years_experience ? 'text-sky-300' : 'text-gray-600'}">${esc(j.years_experience || '—')}</td>
       <td class="px-3 py-2 text-gray-400">${j.match_score ?? ''}</td>
       <td class="px-3 py-2 text-gray-500 text-xs">${(j.first_seen || '').slice(0,10)}</td>
       <td class="px-3 py-2"><button onclick="openModal(${j.id}, '${esc(j.title).replace(/'/g,"")}')" class="text-xs bg-sky-700 hover:bg-sky-600 px-2 py-1 rounded">Analyze</button></td>
@@ -289,17 +296,45 @@ async function loadCompanies() {
       <td class="px-3 py-2"><button onclick="toggleCompany(${c.id})" class="text-xs ${c.active ? 'text-green-400' : 'text-gray-600'}">${c.active ? 'ON' : 'OFF'}</button></td>
       <td class="px-3 py-2 flex gap-2">
         <button onclick="scrapeCompany(${c.id})" class="text-xs bg-sky-700 hover:bg-sky-600 px-2 py-1 rounded">Scrape Now</button>
-        <button onclick="delCompany(${c.id})" class="text-xs text-red-400">✕</button>
+        <button onclick="delCompany(${c.id}, ${esc(JSON.stringify(c.name))})" class="text-xs bg-red-900/50 hover:bg-red-700 text-red-300 px-2 py-1 rounded">Remove</button>
       </td>
     </tr>`).join('');
 }
-async function addCompany() {
-  await api('/api/companies', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({name:$('cName').value, careers_url:$('cUrl').value, tier:parseInt($('cTier').value)})});
-  $('cName').value=''; $('cUrl').value=''; loadCompanies();
+function showMsg(elId, text, isError) {
+  const el = $(elId);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'text-xs mb-3 ' + (isError ? 'text-red-400' : 'text-emerald-400');
+  if (!isError) setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 3000);
 }
-async function delCompany(id){ await api('/api/companies/'+id,{method:'DELETE'}); loadCompanies(); }
-async function toggleCompany(id){ await api('/api/companies/'+id+'/toggle',{method:'PATCH'}); loadCompanies(); }
+
+async function addCompany() {
+  const name = $('cName').value.trim();
+  const url = $('cUrl').value.trim();
+  if (!name || !url) { showMsg('companiesMsg', 'Company name and URL are required.', true); return; }
+  const res = await fetch('/api/companies', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name, careers_url: url, tier: parseInt($('cTier').value)})});
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    showMsg('companiesMsg', 'Error: ' + (err.detail || res.statusText), true);
+    return;
+  }
+  $('cName').value=''; $('cUrl').value='';
+  showMsg('companiesMsg', `✓ ${name} added`, false);
+  loadCompanies();
+}
+async function delCompany(id, name) {
+  if (!confirm(`Remove "${name}" and delete all its scraped jobs? This cannot be undone.`)) return;
+  const res = await fetch('/api/companies/'+id, {method:'DELETE'});
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert('Could not remove company: ' + (err.detail || res.statusText));
+    return;
+  }
+  showMsg('companiesMsg', `✓ ${name} removed`, false);
+  loadCompanies(); loadJobs();
+}
+async function toggleCompany(id){ await api('/api/companies/'+id+'/toggle',{method:'PATCH'}); loadCompanies(); loadJobs(); }
 async function scrapeCompany(id){ await api('/api/scrape/'+id,{method:'POST'}); pollStatus(); }
 
 // ------------------------------------------------------------------
@@ -310,17 +345,46 @@ async function loadConfig() {
   $('rolesList').innerHTML = roles.map(r => `
     <li class="flex justify-between bg-gray-800 rounded px-3 py-1.5">
       <span>${esc(r.keyword)}</span>
-      <button onclick="delRole(${r.id})" class="text-red-400">✕</button></li>`).join('');
+      <button onclick="delRole(${r.id}, ${esc(JSON.stringify(r.keyword))})" class="text-xs bg-red-900/50 hover:bg-red-700 text-red-300 px-2 py-0.5 rounded">Remove</button></li>`).join('');
   const locs = await api('/api/locations');
   $('locsList').innerHTML = locs.map(l => `
     <li class="flex justify-between bg-gray-800 rounded px-3 py-1.5">
       <span>${esc(l.city)}, ${esc(l.state)}</span>
-      <button onclick="delLoc(${l.id})" class="text-red-400">✕</button></li>`).join('');
+      <button onclick="delLoc(${l.id}, ${esc(JSON.stringify(l.city))})" class="text-xs bg-red-900/50 hover:bg-red-700 text-red-300 px-2 py-0.5 rounded">Remove</button></li>`).join('');
 }
-async function addRole(){ if(!$('rKw').value)return; await api('/api/roles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keyword:$('rKw').value})}); $('rKw').value=''; loadConfig(); }
-async function delRole(id){ await api('/api/roles/'+id,{method:'DELETE'}); loadConfig(); }
-async function addLocation(){ if(!$('lCity').value)return; await api('/api/locations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({city:$('lCity').value,state:$('lState').value})}); $('lCity').value=''; loadConfig(); loadCities(); }
-async function delLoc(id){ await api('/api/locations/'+id,{method:'DELETE'}); loadConfig(); loadCities(); }
+async function recalibrateMatches() {
+  const res = await fetch('/api/roles/recalibrate', {method:'POST'});
+  const data = await res.json().catch(() => ({}));
+  showMsg('companiesMsg', `✓ Cleared ${data.cleared ?? 0} stale match(es)`, false);
+  loadJobs();
+}
+
+async function addRole() {
+  const kw = $('rKw').value.trim();
+  if (!kw) return;
+  const res = await fetch('/api/roles', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({keyword:kw})});
+  if (!res.ok) { alert('Failed to add role: ' + res.statusText); return; }
+  $('rKw').value=''; loadConfig();
+}
+async function delRole(id, keyword) {
+  if (!confirm(`Remove "${keyword}"? Jobs matched by this keyword will be unmarked.`)) return;
+  const res = await fetch('/api/roles/'+id, {method:'DELETE'});
+  if (!res.ok) { alert('Failed to remove role: ' + res.statusText); return; }
+  loadConfig(); loadJobs();
+}
+async function addLocation() {
+  const city = $('lCity').value.trim();
+  if (!city) return;
+  const res = await fetch('/api/locations', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({city, state:$('lState').value})});
+  if (!res.ok) { alert('Failed to add location: ' + res.statusText); return; }
+  $('lCity').value=''; loadConfig(); loadCities();
+}
+async function delLoc(id, city) {
+  if (!confirm(`Remove "${city}" from target locations?`)) return;
+  const res = await fetch('/api/locations/'+id, {method:'DELETE'});
+  if (!res.ok) { alert('Failed to remove location: ' + res.statusText); return; }
+  loadConfig(); loadCities();
+}
 
 // ------------------------------------------------------------------
 // Run history tab
@@ -402,6 +466,8 @@ async function generateResume() {
       $('generateStatus').textContent = 'Error: ' + (err.detail || res.statusText);
       return;
     }
+    const atsHeader = res.headers.get('X-ATS-Keywords') || '[]';
+    const atsMatched = JSON.parse(atsHeader);
     const blob = await res.blob();
     const disposition = res.headers.get('Content-Disposition') || '';
     const nameMatch = disposition.match(/filename="([^"]+)"/);
@@ -410,7 +476,10 @@ async function generateResume() {
     const a = document.createElement('a');
     a.href = url; a.download = filename; a.click();
     URL.revokeObjectURL(url);
-    $('generateStatus').textContent = '✓ Downloaded';
+    const kwSummary = atsMatched.length > 0
+      ? ` · <span class="text-green-400">${atsMatched.length} ATS keywords matched</span>`
+      : '';
+    $('generateStatus').innerHTML = '✓ Downloaded' + kwSummary;
   } finally {
     $('generateBtn').disabled = false;
   }
@@ -448,26 +517,73 @@ async function openModal(id, title) {
   }
 }
 function closeModal(){ $('modal').classList.add('hidden'); }
-async function runAnalysis() {
+async function runAnalysis(force = false) {
   $('generateBtn').classList.add('hidden');
+  $('reanalyzeBtn').classList.add('hidden');
   $('generateStatus').textContent = '';
-  $('analysisResult').innerHTML = '<p class="text-gray-400">Analyzing via ResumeAnalysisAgent...</p>';
-  const a = await api('/api/jobs/'+currentJobId+'/analyze', {method:'POST',
+  $('analysisResult').innerHTML = force
+    ? '<p class="text-gray-400">Re-analyzing via ResumeAnalysisAgent...</p>'
+    : '<p class="text-gray-400">Loading analysis...</p>';
+  const url = '/api/jobs/'+currentJobId+'/analyze' + (force ? '?force=true' : '');
+  const a = await api(url, {method:'POST',
     headers:{'Content-Type':'application/json'}, body: JSON.stringify({resume_text:$('resumeText').value})});
-  const color = a.fit_score >= 75 ? 'text-green-400' : a.fit_score >= 55 ? 'text-amber-400' : 'text-red-400';
+
+  if (a._cached) $('reanalyzeBtn').classList.remove('hidden');
+
+  const cachedBadge = a._cached
+    ? `<span class="text-xs bg-gray-700 text-gray-400 px-2 py-0.5 rounded ml-2">Cached · ${(a._cached_at||'').slice(0,10)}</span>`
+    : '';
+
+  const scoreColor = a.fit_score >= 75 ? 'text-green-400' : a.fit_score >= 55 ? 'text-amber-400' : 'text-red-400';
+  const recColor = {
+    'Strong Apply': 'text-green-400', 'Apply': 'text-green-300',
+    'Stretch': 'text-amber-400', 'Skip': 'text-red-400'
+  }[a.apply_recommendation] || 'text-gray-300';
+
+  const dealBreakersHtml = (a.deal_breakers||[]).length > 0 ? `
+    <div class="bg-red-900/20 border border-red-800 rounded-lg p-3 mb-4">
+      <p class="text-sm font-semibold text-red-300 mb-1">⚠ Potential Deal Breakers</p>
+      <ul class="list-disc ml-4 text-sm text-red-200 space-y-1">${(a.deal_breakers||[]).map(d=>`<li>${esc(d)}</li>`).join('')}</ul>
+    </div>` : '';
+
+  const presentChips = (a.ats_present||[]).map(k=>
+    `<span class="text-xs px-2 py-0.5 rounded-full bg-green-900/50 text-green-300 border border-green-800">${esc(k)}</span>`).join('');
+  const missingChips = (a.ats_missing||[]).map(k=>
+    `<span class="text-xs px-2 py-0.5 rounded-full bg-red-900/50 text-red-300 border border-red-800">${esc(k)}</span>`).join('');
+
+  const editsHtml = (a.experience_edits||[]).map(e=>`
+    <div class="bg-gray-800 rounded-lg p-3">
+      <p class="text-xs font-semibold text-amber-300 mb-1">${esc(e.role)}</p>
+      <p class="text-xs text-gray-400 mb-2">→ ${esc(e.action)}</p>
+      <p class="text-sm text-gray-200 bg-gray-700/50 rounded p-2 leading-relaxed">${esc(e.suggested_rewrite)}</p>
+    </div>`).join('');
+
   $('analysisResult').innerHTML = `
-    <div class="mb-3"><span class="text-3xl font-bold ${color}">${a.fit_score}</span><span class="text-gray-500">/100 fit · ${esc(a.apply_recommendation)}</span></div>
-    <p class="text-gray-300 mb-3">${esc(a.fit_summary)}</p>
-    <h3 class="font-semibold text-red-300 mb-1">Gaps</h3>
-    <ul class="list-disc ml-5 mb-3 text-gray-300">${(a.gaps||[]).map(g=>`<li>${esc(g)}</li>`).join('')}</ul>
-    <h3 class="font-semibold text-green-300 mb-1">Strengths</h3>
-    <ul class="list-disc ml-5 mb-3 text-gray-300">${(a.strengths||[]).map(s=>`<li>${esc(s)}</li>`).join('')}</ul>
-    <h3 class="font-semibold text-sky-300 mb-1">Bullet Rewrites</h3>
-    <div class="space-y-2">${(a.bullet_rewrites||[]).map(b=>`
-      <div class="bg-gray-800 rounded p-2">
-        ${b.original ? `<p class="text-gray-500 text-xs line-through">${esc(b.original)}</p>` : ''}
-        <p class="text-gray-200">${esc(b.rewritten)}</p></div>`).join('')}</div>`;
-  // Show Generate Resume button now that analysis is done
+    <div class="flex items-start gap-4 mb-4">
+      <div><span class="text-4xl font-bold ${scoreColor}">${a.fit_score}</span><span class="text-gray-500 text-sm">/100</span>${cachedBadge}</div>
+      <div class="pt-1">
+        <p class="font-semibold ${recColor}">${esc(a.apply_recommendation)}</p>
+        <p class="text-xs text-gray-400 mt-0.5">${esc(a.recommendation_reason||'')}</p>
+      </div>
+    </div>
+    <p class="text-gray-300 text-sm mb-4">${esc(a.fit_summary)}</p>
+    ${dealBreakersHtml}
+    <div class="mb-4">
+      <p class="text-sm font-semibold mb-2">ATS Keyword Coverage <span class="font-normal text-gray-500 text-xs">(these are NOT added automatically — they show your current gap)</span></p>
+      <div class="flex flex-wrap gap-1.5 mb-1.5">${presentChips}${missingChips}</div>
+      <p class="text-xs text-gray-500">🟢 Already in your resume &nbsp;·&nbsp; 🔴 Missing from your resume</p>
+    </div>
+    <div class="mb-4">
+      <p class="text-sm font-semibold text-green-300 mb-1">Strengths</p>
+      <ul class="list-disc ml-5 text-sm text-gray-300 space-y-1">${(a.strengths||[]).map(s=>`<li>${esc(s)}</li>`).join('')}</ul>
+    </div>
+    ${editsHtml.length ? `
+    <div class="mb-2">
+      <p class="text-sm font-semibold text-sky-300">Suggested Experience Edits</p>
+      <p class="text-xs text-gray-500 mt-0.5">For your review only — none of these are applied to the generated resume. Only use rewrites that honestly reflect your actual work.</p>
+    </div>
+    <div class="space-y-3">${editsHtml}</div>` : ''}`;
+
   const status = await api('/api/documents/status');
   if (status.has_cv && status.has_base_resume) {
     $('generateBtn').classList.remove('hidden');

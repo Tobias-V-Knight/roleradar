@@ -161,6 +161,12 @@ def remove_role(role_id: int):
     return {"ok": True}
 
 
+@app.post("/api/roles/recalibrate")
+def recalibrate_matches():
+    affected = database.recalibrate_matches()
+    return {"ok": True, "cleared": affected}
+
+
 # -----------------------------------------------------------------------------
 # Location endpoints
 # -----------------------------------------------------------------------------
@@ -249,15 +255,24 @@ def get_job_description(job_id: int):
 
 
 @app.post("/api/jobs/{job_id}/analyze")
-def analyze_job(job_id: int, body: ResumeIn):
+def analyze_job(job_id: int, body: ResumeIn, force: bool = False):
     """Run ResumeAnalysisAgent on a stored job's JD vs the supplied resume.
 
+    Returns a cached result from the last run unless force=true is passed.
     If no resume_text is provided in the request body, falls back to the
     stored base resume (uploaded via Config > Resume Documents).
     """
+    import json as _json
     job = database.get_job(job_id)
     if not job:
         raise HTTPException(404, "job not found")
+
+    if not force and job.get("last_analysis"):
+        cached = _json.loads(job["last_analysis"])
+        cached["_cached"] = True
+        cached["_cached_at"] = job.get("last_analyzed_at", "")
+        return cached
+
     orch = get_orchestrator()
     jd_text = orch.ensure_description(job_id) or job.get("title", "")
 
@@ -270,6 +285,7 @@ def analyze_job(job_id: int, body: ResumeIn):
         raise HTTPException(400, "No resume text provided and no stored resume found — upload one in Config > Resume Documents")
 
     analysis = orch.analyze_resume(jd_text, resume_text)
+    database.set_job_analysis(job_id, _json.dumps(analysis))
     return analysis
 
 
@@ -374,10 +390,17 @@ async def generate_resume(job_id: int):
     safe_title = "".join(c if c.isalnum() or c in " -_" else "" for c in job.get("title", "resume"))
     filename = f"Resume_{safe_title[:40].strip()}.docx"
 
+    import json as _json
+    ats_matched = _json.dumps(content.get("ats_matched", []))
+
     return Response(
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-ATS-Keywords": ats_matched,
+            "Access-Control-Expose-Headers": "X-ATS-Keywords",
+        },
     )
 
 
