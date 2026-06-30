@@ -84,6 +84,13 @@ CREATE TABLE IF NOT EXISTS jobs (
     last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Stores uploaded CV and base resume (text + original binary for DOCX generation).
+CREATE TABLE IF NOT EXISTS user_documents (
+    key TEXT PRIMARY KEY,
+    text_content TEXT,
+    binary_content BLOB
+);
+
 -- A simple run log so the "Run History" tab has something to show.
 CREATE TABLE IF NOT EXISTS scrape_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -386,6 +393,36 @@ def query_jobs(match_only=False, new_only=False, tier=None, city=None, us_only=T
     rows = conn.execute(sql, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# -----------------------------------------------------------------------------
+# User document storage (CV + base resume)
+# -----------------------------------------------------------------------------
+def save_document(key: str, text_content: str, binary_content: bytes = None):
+    conn = get_conn()
+    conn.execute(
+        "INSERT OR REPLACE INTO user_documents (key, text_content, binary_content) VALUES (?, ?, ?)",
+        (key, text_content, binary_content),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_document(key: str):
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT key, text_content, binary_content FROM user_documents WHERE key = ?",
+        (key,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def documents_status():
+    conn = get_conn()
+    keys = {r[0] for r in conn.execute("SELECT key FROM user_documents").fetchall()}
+    conn.close()
+    return {"has_cv": "cv" in keys, "has_base_resume": "base_resume" in keys}
 
 
 # -----------------------------------------------------------------------------

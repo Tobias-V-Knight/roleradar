@@ -100,7 +100,36 @@
     </section>
 
     <!-- ===================== TAB 3: ROLES & LOCATIONS ===================== -->
-    <section id="tab-config" class="hidden grid grid-cols-1 md:grid-cols-2 gap-6">
+    <section id="tab-config" class="hidden space-y-6">
+
+      <!-- Resume Documents panel -->
+      <div class="bg-gray-900 border border-gray-700 rounded-xl p-5">
+        <h2 class="font-semibold mb-1">Resume Documents</h2>
+        <p class="text-xs text-gray-400 mb-4">Upload once. The CV is the content pool; the base resume (must be .docx) is the format template.</p>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="bg-gray-800 rounded-lg p-4">
+            <p class="text-sm font-medium mb-1">Master CV <span class="text-xs text-gray-400">(PDF or DOCX)</span></p>
+            <p class="text-xs text-gray-500 mb-3">All your experience — the only content GPT-4o draws from.</p>
+            <label class="bg-sky-700 hover:bg-sky-600 px-3 py-1.5 rounded text-sm cursor-pointer">
+              Upload CV
+              <input type="file" accept=".pdf,.docx" class="hidden" onchange="uploadDoc('cv', this)">
+            </label>
+            <span id="cvStatus" class="block mt-2 text-xs text-gray-400"></span>
+          </div>
+          <div class="bg-gray-800 rounded-lg p-4">
+            <p class="text-sm font-medium mb-1">Base Resume <span class="text-xs text-gray-400">(.docx only)</span></p>
+            <p class="text-xs text-gray-500 mb-3">Sets the format — bullets, projects, and skills get replaced per job.</p>
+            <label class="bg-sky-700 hover:bg-sky-600 px-3 py-1.5 rounded text-sm cursor-pointer">
+              Upload Resume
+              <input type="file" accept=".docx" class="hidden" onchange="uploadDoc('base-resume', this)">
+            </label>
+            <span id="baseResumeStatus" class="block mt-2 text-xs text-gray-400"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Roles & Locations (existing content, now wrapped in a grid) -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
       <div>
         <h2 class="font-semibold mb-3">Target Roles</h2>
         <div class="flex gap-2 mb-3 text-sm">
@@ -124,6 +153,7 @@
           <p class="text-xs text-gray-500 mt-1">Display-only slider — server default is set in config.py.</p>
         </div>
       </div>
+      </div><!-- end roles/locations grid -->
     </section>
 
     <!-- ===================== TAB 4: RUN HISTORY ===================== -->
@@ -153,9 +183,26 @@
         <h2 class="font-semibold" id="modalTitle">Analyze vs Resume</h2>
         <button onclick="closeModal()" class="text-gray-500 hover:text-white">✕</button>
       </div>
-      <textarea id="resumeText" rows="6" placeholder="Paste your resume text here..."
-                class="w-full bg-gray-800 rounded p-3 text-sm mb-3"></textarea>
-      <button onclick="runAnalysis()" class="bg-sky-600 hover:bg-sky-500 px-4 py-2 rounded text-sm">Analyze</button>
+      <div id="resumeStoredBadge" class="hidden mb-3 flex items-center gap-2 bg-emerald-900/40 border border-emerald-700 rounded px-3 py-2 text-sm text-emerald-300">
+        <span>✓ Using your stored resume</span>
+        <button onclick="$('resumeStoredBadge').classList.add('hidden');$('resumeUploadSection').classList.remove('hidden')" class="ml-auto text-xs text-gray-400 hover:text-white">Use a different one</button>
+      </div>
+      <div id="resumeUploadSection">
+        <div class="flex items-center gap-3 mb-2">
+          <label class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-sm cursor-pointer">
+            Upload PDF / DOCX
+            <input type="file" id="resumeFile" accept=".pdf,.docx" class="hidden" onchange="loadResumeFile(this)">
+          </label>
+          <span id="resumeFileName" class="text-xs text-gray-400"></span>
+        </div>
+        <textarea id="resumeText" rows="6" placeholder="Paste your resume text here, or upload a PDF / DOCX above..."
+                  class="w-full bg-gray-800 rounded p-3 text-sm mb-3"></textarea>
+      </div>
+      <div class="flex gap-3 items-center">
+        <button onclick="runAnalysis()" class="bg-sky-600 hover:bg-sky-500 px-4 py-2 rounded text-sm">Analyze</button>
+        <button id="generateBtn" onclick="generateResume()" class="hidden bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded text-sm">Generate Resume</button>
+        <span id="generateStatus" class="text-xs text-gray-400"></span>
+      </div>
       <div id="analysisResult" class="mt-4 text-sm"></div>
     </div>
   </div>
@@ -180,7 +227,7 @@ document.querySelectorAll('.tab').forEach(btn => {
     ['dashboard','companies','config','history'].forEach(t =>
       $('tab-'+t).classList.toggle('hidden', t !== btn.dataset.tab));
     if (btn.dataset.tab === 'companies') loadCompanies();
-    if (btn.dataset.tab === 'config') loadConfig();
+    if (btn.dataset.tab === 'config') { loadConfig(); checkDocStatus(); }
     if (btn.dataset.tab === 'history') loadRuns();
   };
 });
@@ -316,10 +363,94 @@ setInterval(pollStatus, 5000);
 // ------------------------------------------------------------------
 // Analyze modal
 // ------------------------------------------------------------------
+// ------------------------------------------------------------------
+// Resume document uploads (CV + base resume, stored server-side)
+// ------------------------------------------------------------------
+async function uploadDoc(key, input) {
+  const file = input.files[0];
+  if (!file) return;
+  const statusEl = $( key === 'cv' ? 'cvStatus' : 'baseResumeStatus');
+  statusEl.textContent = 'Uploading…';
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`/api/documents/${key}`, {method:'POST', body:form});
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    statusEl.textContent = 'Error: ' + (err.detail || res.statusText);
+    return;
+  }
+  const data = await res.json();
+  statusEl.textContent = `✓ ${file.name} (${(data.chars/1000).toFixed(1)}k chars)`;
+}
+
+async function checkDocStatus() {
+  const s = await api('/api/documents/status');
+  if (s.has_cv) $('cvStatus').textContent = $('cvStatus').textContent || '✓ CV on file';
+  if (s.has_base_resume) $('baseResumeStatus').textContent = $('baseResumeStatus').textContent || '✓ Resume on file';
+}
+
+// ------------------------------------------------------------------
+// Generate tailored resume DOCX
+// ------------------------------------------------------------------
+async function generateResume() {
+  $('generateStatus').textContent = 'Generating…';
+  $('generateBtn').disabled = true;
+  try {
+    const res = await fetch(`/api/jobs/${currentJobId}/generate`, {method:'POST'});
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      $('generateStatus').textContent = 'Error: ' + (err.detail || res.statusText);
+      return;
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const nameMatch = disposition.match(/filename="([^"]+)"/);
+    const filename = nameMatch ? nameMatch[1] : 'resume.docx';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+    $('generateStatus').textContent = '✓ Downloaded';
+  } finally {
+    $('generateBtn').disabled = false;
+  }
+}
+
+async function loadResumeFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  $('resumeFileName').textContent = 'Uploading…';
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch('/api/resume/upload', {method:'POST', body:form});
+  if (!res.ok) { $('resumeFileName').textContent = 'Upload failed'; return; }
+  const {text} = await res.json();
+  $('resumeText').value = text;
+  $('resumeFileName').textContent = file.name;
+}
+
 let currentJobId = null;
-function openModal(id, title){ currentJobId=id; $('modalTitle').textContent='Analyze: '+title; $('analysisResult').innerHTML=''; $('modal').classList.remove('hidden'); }
+async function openModal(id, title) {
+  currentJobId = id;
+  $('modalTitle').textContent = 'Analyze: ' + title;
+  $('analysisResult').innerHTML = '';
+  $('generateBtn').classList.add('hidden');
+  $('generateStatus').textContent = '';
+  $('modal').classList.remove('hidden');
+
+  const status = await api('/api/documents/status');
+  if (status.has_base_resume) {
+    $('resumeUploadSection').classList.add('hidden');
+    $('resumeStoredBadge').classList.remove('hidden');
+  } else {
+    $('resumeUploadSection').classList.remove('hidden');
+    $('resumeStoredBadge').classList.add('hidden');
+  }
+}
 function closeModal(){ $('modal').classList.add('hidden'); }
 async function runAnalysis() {
+  $('generateBtn').classList.add('hidden');
+  $('generateStatus').textContent = '';
   $('analysisResult').innerHTML = '<p class="text-gray-400">Analyzing via ResumeAnalysisAgent...</p>';
   const a = await api('/api/jobs/'+currentJobId+'/analyze', {method:'POST',
     headers:{'Content-Type':'application/json'}, body: JSON.stringify({resume_text:$('resumeText').value})});
@@ -336,6 +467,13 @@ async function runAnalysis() {
       <div class="bg-gray-800 rounded p-2">
         ${b.original ? `<p class="text-gray-500 text-xs line-through">${esc(b.original)}</p>` : ''}
         <p class="text-gray-200">${esc(b.rewritten)}</p></div>`).join('')}</div>`;
+  // Show Generate Resume button now that analysis is done
+  const status = await api('/api/documents/status');
+  if (status.has_cv && status.has_base_resume) {
+    $('generateBtn').classList.remove('hidden');
+  } else {
+    $('generateStatus').textContent = 'Upload CV + base resume in Config to enable Generate Resume';
+  }
 }
 
 // ------------------------------------------------------------------
@@ -344,6 +482,7 @@ async function runAnalysis() {
 loadCities();
 loadJobs();
 pollStatus();
+checkDocStatus();
 </script>
 </body>
 </html>

@@ -10,8 +10,8 @@ import threading
 from typing import Optional
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -250,16 +250,135 @@ def get_job_description(job_id: int):
 
 @app.post("/api/jobs/{job_id}/analyze")
 def analyze_job(job_id: int, body: ResumeIn):
-    """Run ResumeAnalysisAgent on a stored job's JD vs the supplied resume."""
+    """Run ResumeAnalysisAgent on a stored job's JD vs the supplied resume.
+
+    If no resume_text is provided in the request body, falls back to the
+    stored base resume (uploaded via Config > Resume Documents).
+    """
     job = database.get_job(job_id)
     if not job:
         raise HTTPException(404, "job not found")
     orch = get_orchestrator()
-    # Lazily fetch the full JD now (cached after the first call) so analysis has
-    # real text instead of just the title.
     jd_text = orch.ensure_description(job_id) or job.get("title", "")
-    analysis = orch.analyze_resume(jd_text, body.resume_text)
+
+    resume_text = (body.resume_text or "").strip()
+    if not resume_text:
+        stored = database.get_document("base_resume")
+        if stored:
+            resume_text = stored["text_content"]
+    if not resume_text:
+        raise HTTPException(400, "No resume text provided and no stored resume found — upload one in Config > Resume Documents")
+
+    analysis = orch.analyze_resume(jd_text, resume_text)
     return analysis
+
+
+# -----------------------------------------------------------------------------
+# Resume upload endpoint (per-job ad-hoc upload, kept for backwards compat)
+# -----------------------------------------------------------------------------
+@app.post("/api/resume/upload")
+async def upload_resume(file: UploadFile = File(...)):
+    """Extract plain text from an uploaded PDF or DOCX resume."""
+    filename = file.filename or ""
+    data = await file.read()
+
+    if filename.lower().endswith(".pdf"):
+        import io
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    elif filename.lower().endswith(".docx"):
+        import io
+        from docx import Document
+        doc = Document(io.BytesIO(data))
+        text = "\n".join(p.text for p in doc.paragraphs)
+    else:
+        raise HTTPException(400, "Only .pdf and .docx files are supported")
+
+    return JSONResponse({"text": text.strip()})
+
+
+# -----------------------------------------------------------------------------
+# Master CV + base resume storage
+# -----------------------------------------------------------------------------
+def _extract_text(data: bytes, filename: str) -> str:
+    """Extract plain text from PDF or DOCX bytes."""
+    import io
+    if filename.lower().endswith(".pdf"):
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        return "\n".join(page.extract_text() or "" for page in reader.pages).strip()
+    elif filename.lower().endswith(".docx"):
+        from docx import Document
+        doc = Document(io.BytesIO(data))
+        return "\n".join(p.text for p in doc.paragraphs).strip()
+    raise HTTPException(400, "Only .pdf and .docx files are supported")
+
+
+@app.post("/api/documents/cv")
+async def upload_cv(file: UploadFile = File(...)):
+    """Store master CV text (used as the content pool for resume generation)."""
+    data = await file.read()
+    text = _extract_text(data, file.filename or "")
+    database.save_document("cv", text)
+    return {"ok": True, "chars": len(text)}
+
+
+@app.post("/api/documents/base-resume")
+async def upload_base_resume(file: UploadFile = File(...)):
+    """Store base resume as text + original DOCX bytes (used as the generation template)."""
+    filename = file.filename or ""
+    if not filename.lower().endswith(".docx"):
+        raise HTTPException(400, "Base resume must be a .docx file so it can be used as a template")
+    data = await file.read()
+    text = _extract_text(data, filename)
+    database.save_document("base_resume", text, binary_content=data)
+    return {"ok": True, "chars": len(text)}
+
+
+@app.get("/api/documents/status")
+def documents_status():
+    return database.documents_status()
+
+
+@app.post("/api/jobs/{job_id}/generate")
+async def generate_resume(job_id: int):
+    """Generate a tailored resume DOCX for a specific job, using the stored CV + base resume."""
+    from agents import resume_builder
+
+    cv_doc = database.get_document("cv")
+    base_doc = database.get_document("base_resume")
+    if not cv_doc:
+        raise HTTPException(400, "No master CV uploaded — go to Config > Resume Documents")
+    if not base_doc or not base_doc.get("binary_content"):
+        raise HTTPException(400, "No base resume uploaded — go to Config > Resume Documents")
+
+    job = database.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+
+    orch = get_orchestrator()
+    jd_text = orch.ensure_description(job_id) or job.get("title", "")
+
+    content = resume_builder.generate_content(
+        jd_text=jd_text,
+        cv_text=cv_doc["text_content"],
+        base_resume_text=base_doc["text_content"],
+    )
+
+    docx_bytes = resume_builder.build_docx(
+        base_docx_bytes=base_doc["binary_content"],
+        content_json=content,
+    )
+
+    safe_title = "".join(c if c.isalnum() or c in " -_" else "" for c in job.get("title", "resume"))
+    filename = f"Resume_{safe_title[:40].strip()}.docx"
+
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # -----------------------------------------------------------------------------

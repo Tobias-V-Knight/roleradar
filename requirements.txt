@@ -14,3 +14,5 @@ azure-ai-projects
 azure-identity
 openai
 python-dotenv
+pypdf
+python-docx
